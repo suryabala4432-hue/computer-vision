@@ -1,0 +1,146 @@
+import numpy as np
+import pywt
+import cv2
+import matplotlib.pyplot as plt
+import pandas as pd
+import os
+
+def load_image(path=None):
+    """
+    Loads an image from 'path'.
+    If path is None or does not exist, generates a synthetic demo image.
+    """
+    if path and os.path.exists(path):
+        print(f"[INFO] Loading image from: {path}")
+        # Load as Grayscale (0 flag is crucial for MRA)
+        img = cv2.imread(path, 0)
+        if img is None:
+            raise ValueError(f"Could not decode image at {path}")
+    else:
+        print(f"[INFO] Path '{path}' not found or None. Generating synthetic image for demo...")
+        # Create a black background
+        img = np.zeros((512, 512), dtype=np.uint8)
+
+        # Draw a white rectangle and circle for contrast
+        cv2.rectangle(img, (100, 100), (400, 400), 255, -1)
+        cv2.circle(img, (256, 256), 100, 150, -1)
+
+        # Add Gaussian noise safely
+        noise = np.random.normal(0, 20, img.shape).astype(np.int16)
+        img_int = img.astype(np.int16) + noise
+
+        # Clip values to 0-255 range and convert back to uint8
+        img = np.clip(img_int, 0, 255).astype(np.uint8)
+
+    return img
+
+def visualize_decomposition(coeffs):
+    """
+    Plots the Approximations and Details for all levels.
+    """
+    level_count = len(coeffs) - 1
+
+    # Create a figure
+    fig = plt.figure(figsize=(12, 10))
+    fig.suptitle(f"Wavelet Decomposition (Levels 1 to {level_count})", fontsize=16)
+
+    # 1. Plot Approximation (Lowest Level)
+    cA = coeffs[0]
+    ax = fig.add_subplot(level_count + 1, 4, 1)
+    ax.imshow(cA, cmap='gray')
+    ax.set_title(f"Approx (LL{level_count})")
+    ax.axis('off')
+
+    # 2. Loop through details
+    for i, details in enumerate(coeffs[1:]):
+        level_index = level_count - i
+        (cH, cV, cD) = details
+
+        # Determine plot row (starts after approximation)
+        row = i + 1
+
+        # We take np.abs() because detail coefficients are often negative
+        ax1 = fig.add_subplot(level_count + 1, 4, row * 4 - 2)
+        ax1.imshow(np.abs(cH), cmap='gray')
+        ax1.set_title(f"Horizontal (LH{level_index})")
+        ax1.axis('off')
+
+        ax2 = fig.add_subplot(level_count + 1, 4, row * 4 - 1)
+        ax2.imshow(np.abs(cV), cmap='gray')
+        ax2.set_title(f"Vertical (HL{level_index})")
+        ax2.axis('off')
+
+        ax3 = fig.add_subplot(level_count + 1, 4, row * 4)
+        ax3.imshow(np.abs(cD), cmap='gray')
+        ax3.set_title(f"Diagonal (HH{level_index})")
+        ax3.axis('off')
+
+    plt.tight_layout()
+    plt.show()
+
+def extract_features(coeffs):
+    """Extracts statistical features from the coefficients."""
+    features = {}
+
+    def calc_entropy(matrix):
+        p = np.abs(matrix.flatten())
+        total = np.sum(p)
+        if total == 0:
+            return 0
+        p = p / total
+        p = p[p > 0]
+        return -np.sum(p * np.log2(p))
+
+    # Process Approximation
+    cA = coeffs[0]
+    level = len(coeffs) - 1
+    features[f'LL{level}_Energy'] = np.sum(cA**2)
+    features[f'LL{level}_Mean'] = np.mean(cA)
+
+    # Process Details
+    for i, (cH, cV, cD) in enumerate(coeffs[1:]):
+        curr_lvl = level - i
+
+        for band, name in zip([cH, cV, cD], ['LH', 'HL', 'HH']):
+            features[f'{name}{curr_lvl}_Energy'] = np.sum(band**2)
+            features[f'{name}{curr_lvl}_Entropy'] = calc_entropy(band)
+            features[f'{name}{curr_lvl}_StdDev'] = np.std(band)
+
+    return pd.DataFrame([features]).T
+
+if __name__ == "__main__":
+    # Corrected: Path is a string inside quotes, located in the main execution block
+    image_path = "/content/4e914015-c791-48c7-865c-6c495968dcfb_957x535.png"
+
+    try:
+        # 1. Load Image
+        original_img = load_image(image_path)
+
+        # Show Original Image
+        plt.figure(figsize=(6,6))
+        plt.imshow(original_img, cmap='gray')
+        plt.title("Input Image")
+        plt.axis('off')
+        plt.show()
+
+        # 2. Perform Wavelet Decomposition (MRA)
+        print("Performing Wavelet Decomposition...")
+        coeffs = pywt.wavedec2(original_img, 'db2', level=3)
+
+        # 3. Visualize Stages
+        print("Displaying Decomposition Stages...")
+        visualize_decomposition(coeffs)
+
+        # 4. Extract and Print Features
+        print("\nExtracting Features...")
+        feats = extract_features(coeffs)
+
+        # Print results
+        print("\n" + "="*40)
+        print("FINAL FEATURE VECTOR")
+        print("="*40)
+        pd.set_option('display.max_rows', None)
+        print(feats)
+
+    except Exception as e:
+        print(f"An error occurred: {e}")
